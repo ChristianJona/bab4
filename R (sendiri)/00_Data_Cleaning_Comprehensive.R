@@ -157,12 +157,14 @@ if(!file.exists(path_males)) stop("File not found: ", path_males)
 # Baca data FEMALES dari HMD
 data_females_hmd <- read_csv2(path_females, show_col_types = FALSE) %>%
   mutate(Sex = "Female") %>%
-  rename(Cohort = Year)
+  rename(Cohort = Year) %>%
+  mutate(Cohort = as.integer(Cohort))
 
 # Baca data MALES dari HMD
 data_males_hmd <- read_csv2(path_males, show_col_types = FALSE) %>%
   mutate(Sex = "Male") %>%
-  rename(Cohort = Year)
+  rename(Cohort = Year) %>%
+  mutate(Cohort = as.integer(Cohort))
 
 cat(sprintf("  ✓ Female HMD: %d rows\n", nrow(data_females_hmd)))
 cat(sprintf("  ✓ Male HMD: %d rows\n", nrow(data_males_hmd)))

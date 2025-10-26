@@ -24,7 +24,7 @@ convert_period_to_cohort <- function(cbs_data, cohort_years) {
 
   cbs_cohort <- cbs_data %>%
     mutate(
-      Cohort = year - age
+      Cohort = as.integer(year - age)
     ) %>%
     # Filter hanya cohort yang kita perlukan
     filter(Cohort %in% cohort_years) %>%
