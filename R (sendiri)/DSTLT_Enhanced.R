@@ -31,9 +31,29 @@ fit_dstlt_tidy <- function(data, sex = "Female", startN = 80, endN = 105, verbos
   # Filter by sex
   data_sex <- data %>% filter(Sex == sex)
 
+  # Validate data
+  if(nrow(data_sex) == 0) {
+    cat("  ✗ Error: No data found for sex =", sex, "\n")
+    return(NULL)
+  }
+
+  # Remove rows with invalid qx values
+  data_sex <- data_sex %>%
+    filter(!is.na(qx), !is.infinite(qx), qx >= 0, qx <= 1)
+
+  if(nrow(data_sex) == 0) {
+    cat("  ✗ Error: No valid qx values found after filtering\n")
+    return(NULL)
+  }
+
   # Get cohorts
   cohorts <- unique(data_sex$Cohort) %>% sort()
   n_cohorts <- length(cohorts)
+
+  if(n_cohorts < 2) {
+    cat("  ✗ Error: DSTLT requires at least 2 cohorts. Found:", n_cohorts, "\n")
+    return(NULL)
+  }
 
   if(verbose) {
     cat(sprintf("  Cohorts: %d (range %d-%d)\n",
@@ -50,14 +70,43 @@ fit_dstlt_tidy <- function(data, sex = "Female", startN = 80, endN = 105, verbos
     summarise(
       min_age = min(Age),
       max_age = max(Age),
+      n_obs = n(),
       .groups = "drop"
     )
 
-  common_min_age <- max(age_ranges$min_age)
-  common_max_age <- min(age_ranges$max_age)
+  # Filter cohorts with sufficient data points
+  valid_cohorts <- age_ranges %>%
+    filter(n_obs >= 10)  # At least 10 age points per cohort
+
+  if(nrow(valid_cohorts) < 2) {
+    cat("  ✗ Error: Not enough cohorts with sufficient data (need >=10 ages per cohort)\n")
+    return(NULL)
+  }
+
+  cohorts <- valid_cohorts$Cohort
+  n_cohorts <- length(cohorts)
+
+  common_min_age <- max(valid_cohorts$min_age)
+  common_max_age <- min(valid_cohorts$max_age)
 
   if(verbose) {
     cat(sprintf("  Common age range: %d - %d\n", common_min_age, common_max_age))
+  }
+
+  # Adjust startN and endN based on data
+  if(startN < common_min_age) {
+    startN <- common_min_age + 10
+    if(verbose) cat(sprintf("  ⚠ Adjusted startN to %d (based on data)\n", startN))
+  }
+
+  if(endN > common_max_age) {
+    endN <- common_max_age - 5
+    if(verbose) cat(sprintf("  ⚠ Adjusted endN to %d (based on data)\n", endN))
+  }
+
+  if(startN >= endN) {
+    cat("  ✗ Error: startN must be < endN\n")
+    return(NULL)
   }
 
   # Create matrices
@@ -67,11 +116,21 @@ fit_dstlt_tidy <- function(data, sex = "Female", startN = 80, endN = 105, verbos
   for(j in 1:n_cohorts) {
     cohort_data <- data_sex %>%
       filter(Cohort == cohorts[j]) %>%
-      arrange(Age)
+      arrange(Age) %>%
+      filter(!is.na(qx), !is.infinite(qx))
 
     n_ages <- nrow(cohort_data)
-    ages_matrix[1:n_ages, j] <- cohort_data$Age
-    qx_matrix[1:n_ages, j] <- cohort_data$qx
+
+    if(n_ages > 0) {
+      ages_matrix[1:n_ages, j] <- cohort_data$Age
+      qx_matrix[1:n_ages, j] <- cohort_data$qx
+    }
+  }
+
+  # Validate matrices
+  if(all(is.na(ages_matrix)) || all(is.na(qx_matrix))) {
+    cat("  ✗ Error: Matrices are empty after preparation\n")
+    return(NULL)
   }
 
   # Fit DSTLT
@@ -96,12 +155,19 @@ fit_dstlt_tidy <- function(data, sex = "Female", startN = 80, endN = 105, verbos
     model$sex <- sex
     model$cohorts <- cohorts
     model$n_cohorts <- n_cohorts
+    model$ages <- ages_matrix
 
     return(model)
 
   }, error = function(e) {
     cat("  ✗ Error fitting DSTLT:\n")
     cat(sprintf("    %s\n", e$message))
+    if(verbose) {
+      cat("  Debug info:\n")
+      cat(sprintf("    - startN: %d, endN: %d\n", startN, endN))
+      cat(sprintf("    - n_cohorts: %d\n", n_cohorts))
+      cat(sprintf("    - Matrix dimensions: %d x %d\n", nrow(ages_matrix), ncol(ages_matrix)))
+    }
     return(NULL)
   })
 }
@@ -190,6 +256,20 @@ plot_dstlt_model <- function(dstlt_model, period_index = 1, age_range = c(65, 11
 #' @return Vector of predicted qx
 predict_dstlt_model <- function(dstlt_model, newdata, t = 1) {
 
+  # Validate inputs
+  if(is.null(dstlt_model)) {
+    warning("DSTLT model is NULL")
+    return(rep(NA, length(newdata)))
+  }
+
+  if(length(newdata) == 0) {
+    return(numeric(0))
+  }
+
+  if(any(is.na(newdata))) {
+    warning("newdata contains NA values")
+  }
+
   # Extract parameters
   a <- dstlt_model$coefficients$a
   b <- dstlt_model$coefficients$b
@@ -198,55 +278,97 @@ predict_dstlt_model <- function(dstlt_model, newdata, t = 1) {
   N <- dstlt_model$coefficients$N
   start <- dstlt_model$Start
 
+  # Validate parameters
+  if(is.na(N) || is.null(N) || length(N) == 0) {
+    warning("Invalid threshold age N")
+    return(rep(NA, length(newdata)))
+  }
+
   # Compute B and C for this period
   B <- exp(a + b * t)
   C <- 1 / (theta * B)^(1/N)
 
+  # Check for invalid B or C
+  if(is.na(B) || is.infinite(B) || is.na(C) || is.infinite(C)) {
+    warning("Invalid B or C parameters")
+    return(rep(NA, length(newdata)))
+  }
+
   # Predict qx for each age
   qx <- numeric(length(newdata))
 
-  for(i in 1:length(newdata)) {
+  for(i in seq_along(newdata)) {
     x <- newdata[i]
 
-    if(x < N) {
+    # Handle NA ages
+    if(is.na(x)) {
+      qx[i] <- NA
+      next
+    }
+
+    # Ensure x has length > 0
+    if(length(x) == 0) {
+      qx[i] <- NA
+      next
+    }
+
+    # Safe comparison with N
+    if(!is.na(x) && !is.na(N) && x < N) {
       # Gompertz component
-      numerator <- exp(-B/log(C) * (C^x - 1)) - exp(-B/log(C) * (C^(x+1) - 1))
-      denominator <- exp(-B/log(C) * (C^x - 1))
+      tryCatch({
+        numerator <- exp(-B/log(C) * (C^x - 1)) - exp(-B/log(C) * (C^(x+1) - 1))
+        denominator <- exp(-B/log(C) * (C^x - 1))
 
-      if(denominator > 0) {
-        qx[i] <- numerator / denominator
-      } else {
-        qx[i] <- 0
-      }
+        if(!is.na(denominator) && denominator > 1e-100) {
+          qx[i] <- numerator / denominator
+        } else {
+          qx[i] <- 0
+        }
+      }, error = function(e) {
+        qx[i] <- NA
+      })
 
-    } else if(x < N + 1) {
+    } else if(!is.na(x) && !is.na(N) && x < N + 1) {
       # Transition region
-      term1 <- -1 + exp(-B/log(C) * (C^x - 1))
-      term2 <- 1 - (exp(-B/log(C) * (C^N - 1))) * (1 + gamma * ((x+1) - N) / theta)^(-1/gamma)
-      denominator <- exp(-B/log(C) * (C^x - 1))
+      tryCatch({
+        term1 <- -1 + exp(-B/log(C) * (C^x - 1))
+        term2 <- 1 - (exp(-B/log(C) * (C^N - 1))) * (1 + gamma * ((x+1) - N) / theta)^(-1/gamma)
+        denominator <- exp(-B/log(C) * (C^x - 1))
 
-      if(denominator > 0) {
-        qx[i] <- (term1 + term2) / denominator
-      } else {
-        qx[i] <- 0
-      }
+        if(!is.na(denominator) && denominator > 1e-100) {
+          qx[i] <- (term1 + term2) / denominator
+        } else {
+          qx[i] <- 0
+        }
+      }, error = function(e) {
+        qx[i] <- NA
+      })
 
     } else {
       # Pareto component
       omega <- N - theta / gamma
 
-      if(x < (omega - 1)) {
-        numerator <- (1 + gamma * (x - N) / theta)^(-1/gamma) -
-                     (1 + gamma * ((x+1) - N) / theta)^(-1/gamma)
-        denominator <- (1 + gamma * (x - N) / theta)^(-1/gamma)
+      if(is.na(omega) || is.infinite(omega)) {
+        qx[i] <- NA
+        next
+      }
 
-        if(denominator > 0) {
-          qx[i] <- numerator / denominator
-        } else {
-          qx[i] <- 0
-        }
+      if(!is.na(x) && x < (omega - 1)) {
+        tryCatch({
+          numerator <- (1 + gamma * (x - N) / theta)^(-1/gamma) -
+                       (1 + gamma * ((x+1) - N) / theta)^(-1/gamma)
+          denominator <- (1 + gamma * (x - N) / theta)^(-1/gamma)
 
-      } else if(x < omega) {
+          if(!is.na(denominator) && abs(denominator) > 1e-100) {
+            qx[i] <- numerator / denominator
+          } else {
+            qx[i] <- 0
+          }
+        }, error = function(e) {
+          qx[i] <- NA
+        })
+
+      } else if(!is.na(x) && !is.na(omega) && x < omega) {
         qx[i] <- 1
       } else {
         qx[i] <- NA
@@ -254,8 +376,9 @@ predict_dstlt_model <- function(dstlt_model, newdata, t = 1) {
     }
   }
 
-  # Bound to [0, 1]
-  qx <- pmax(0, pmin(1, qx, na.rm = TRUE))
+  # Bound to [0, 1] and handle invalid values
+  qx <- ifelse(is.na(qx) | is.infinite(qx), NA,
+               pmax(0, pmin(1, qx)))
 
   return(qx)
 }

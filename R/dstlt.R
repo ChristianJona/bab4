@@ -70,16 +70,70 @@ dstlt<-function(ages,qxs,startN=80,endN=105,censorAge=NULL,hessian=FALSE)
       b <- theta[2]
       thet <- theta[3]
       gam <- theta[4]
+
+      # Validate parameters
+      if(any(is.na(theta)) || any(is.infinite(theta))) {
+        return(-Inf)
+      }
+
+      # Additional constraints to avoid numerical issues
+      if(thet <= 0 || abs(gam) < 0.001) {
+        return(-Inf)
+      }
+
       timelike=rep(0,periods)
       for (t in 1:periods) {
-        timelike[t] <- sum(dxs[1:(N-start),t]*(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*(((thet*exp(a+b*t))^(-1/N))^x-1)+log(1-exp(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*((thet*exp(a+b*t))^(-1/N))^x*(((thet*exp(a+b*t))^(-1/N))-1)))))+exposuress[N-(start-1),t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^N-1))-exposuress[1,t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^start-1))+sum(dxs[(N-(start-1)):(which(is.na(qxs[,t]))[1]-1),t]*log((1+gam*((x2[!is.na(x2[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)-(1+gam*((x3[!is.na(x3[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)))+ltaus[t]*log((1+gam*((taus[t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam))
+        tryCatch({
+          timelike[t] <- sum(dxs[1:(N-start),t]*(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*(((thet*exp(a+b*t))^(-1/N))^x-1)+log(1-exp(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*((thet*exp(a+b*t))^(-1/N))^x*(((thet*exp(a+b*t))^(-1/N))-1)))))+exposuress[N-(start-1),t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^N-1))-exposuress[1,t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^start-1))+sum(dxs[(N-(start-1)):(which(is.na(qxs[,t]))[1]-1),t]*log((1+gam*((x2[!is.na(x2[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)-(1+gam*((x3[!is.na(x3[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)))+ltaus[t]*log((1+gam*((taus[t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam))
+
+          # Check for invalid values
+          if(is.na(timelike[t]) || is.infinite(timelike[t])) {
+            timelike[t] <- -1e10
+          }
+        }, error = function(e) {
+          timelike[t] <- -1e10
+        })
       }
       out=sum(timelike)
+
+      # Final validation
+      if(is.na(out) || is.infinite(out)) {
+        return(-Inf)
+      }
+
       return(out)
     }
 
-    theta.start <- c(-11,-2,3,2)
-    out <- optim(theta.start, log.lik, hessian = FALSE, control = list(fnscale=-1), method="Nelder-Mead")
+    # Try multiple starting values if optimization fails
+    theta.starts <- list(
+      c(-11, -2, 3, 2),      # Original
+      c(-10, -1, 2.5, 1.5),  # Alternative 1
+      c(-12, -2.5, 3.5, 2.5) # Alternative 2
+    )
+
+    out <- NULL
+    best_loglik <- -Inf
+
+    for(theta.start in theta.starts) {
+      tryCatch({
+        out_temp <- optim(theta.start, log.lik, hessian = FALSE,
+                          control = list(fnscale=-1, maxit=1000),
+                          method="Nelder-Mead")
+
+        # Check if this is better than previous attempts
+        if(!is.null(out_temp) && !is.na(out_temp$value) && out_temp$value > best_loglik) {
+          out <- out_temp
+          best_loglik <- out_temp$value
+        }
+      }, error = function(e) {
+        # Try next starting value
+      })
+    }
+
+    # If all attempts failed, throw error
+    if(is.null(out)) {
+      stop("function cannot be evaluated at initial parameters")
+    }
     beta.hat <- out$par
     beta.hat
     a=beta.hat[1]
@@ -113,16 +167,70 @@ dstlt<-function(ages,qxs,startN=80,endN=105,censorAge=NULL,hessian=FALSE)
     b <- theta[2]
     thet <- theta[3]
     gam <- theta[4]
+
+    # Validate parameters
+    if(any(is.na(theta)) || any(is.infinite(theta))) {
+      return(-Inf)
+    }
+
+    # Additional constraints to avoid numerical issues
+    if(thet <= 0 || abs(gam) < 0.001) {
+      return(-Inf)
+    }
+
     timelike=rep(0,periods)
     for (t in 1:periods) {
-      timelike[t] <- sum(dxs[1:(N-start),t]*(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*(((thet*exp(a+b*t))^(-1/N))^x-1)+log(1-exp(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*((thet*exp(a+b*t))^(-1/N))^x*(((thet*exp(a+b*t))^(-1/N))-1)))))+exposuress[N-(start-1),t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^N-1))-exposuress[1,t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^start-1))+sum(dxs[(N-(start-1)):(which(is.na(qxs[,t]))[1]-1),t]*log((1+gam*((x2[!is.na(x2[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)-(1+gam*((x3[!is.na(x3[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)))+ltaus[t]*log((1+gam*((taus[t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam))
+      tryCatch({
+        timelike[t] <- sum(dxs[1:(N-start),t]*(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*(((thet*exp(a+b*t))^(-1/N))^x-1)+log(1-exp(-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t))*((thet*exp(a+b*t))^(-1/N))^x*(((thet*exp(a+b*t))^(-1/N))-1)))))+exposuress[N-(start-1),t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^N-1))-exposuress[1,t]*((-(exp(a+b*t))/((-1/N)*(log(thet)+a+b*t)))*(((thet*exp(a+b*t))^(-1/N))^start-1))+sum(dxs[(N-(start-1)):(which(is.na(qxs[,t]))[1]-1),t]*log((1+gam*((x2[!is.na(x2[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)-(1+gam*((x3[!is.na(x3[,t]),t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam)))+ltaus[t]*log((1+gam*((taus[t]-N)/(1/(((thet*exp(a+b*t))^(-1/N))^N*exp(a+b*t)))))^(-1/gam))
+
+        # Check for invalid values
+        if(is.na(timelike[t]) || is.infinite(timelike[t])) {
+          timelike[t] <- -1e10
+        }
+      }, error = function(e) {
+        timelike[t] <- -1e10
+      })
     }
     out=sum(timelike)
+
+    # Final validation
+    if(is.na(out) || is.infinite(out)) {
+      return(-Inf)
+    }
+
     return(out)
   }
   if (hessian==TRUE) {
-    theta.start <- c(-11,-2,3,2)
-    out <- optim(theta.start, log.lik, hessian = TRUE, control = list(fnscale=-1), method="Nelder-Mead")
+    # Try multiple starting values if optimization fails
+    theta.starts <- list(
+      c(-11, -2, 3, 2),      # Original
+      c(-10, -1, 2.5, 1.5),  # Alternative 1
+      c(-12, -2.5, 3.5, 2.5) # Alternative 2
+    )
+
+    out <- NULL
+    best_loglik <- -Inf
+
+    for(theta.start in theta.starts) {
+      tryCatch({
+        out_temp <- optim(theta.start, log.lik, hessian = TRUE,
+                          control = list(fnscale=-1, maxit=1000),
+                          method="Nelder-Mead")
+
+        # Check if this is better than previous attempts
+        if(!is.null(out_temp) && !is.na(out_temp$value) && out_temp$value > best_loglik) {
+          out <- out_temp
+          best_loglik <- out_temp$value
+        }
+      }, error = function(e) {
+        # Try next starting value
+      })
+    }
+
+    # If all attempts failed, throw error
+    if(is.null(out)) {
+      stop("function cannot be evaluated at initial parameters")
+    }
     beta.hat <- out$par
     beta.hat
     a=beta.hat[1]
@@ -136,8 +244,36 @@ dstlt<-function(ages,qxs,startN=80,endN=105,censorAge=NULL,hessian=FALSE)
     class(returnlist)="dstlt"
     return(returnlist)
   } else {
-    theta.start <- c(-11,-2,3,2)
-    out <- optim(theta.start, log.lik, hessian = FALSE, control = list(fnscale=-1), method="Nelder-Mead")
+    # Try multiple starting values if optimization fails
+    theta.starts <- list(
+      c(-11, -2, 3, 2),      # Original
+      c(-10, -1, 2.5, 1.5),  # Alternative 1
+      c(-12, -2.5, 3.5, 2.5) # Alternative 2
+    )
+
+    out <- NULL
+    best_loglik <- -Inf
+
+    for(theta.start in theta.starts) {
+      tryCatch({
+        out_temp <- optim(theta.start, log.lik, hessian = FALSE,
+                          control = list(fnscale=-1, maxit=1000),
+                          method="Nelder-Mead")
+
+        # Check if this is better than previous attempts
+        if(!is.null(out_temp) && !is.na(out_temp$value) && out_temp$value > best_loglik) {
+          out <- out_temp
+          best_loglik <- out_temp$value
+        }
+      }, error = function(e) {
+        # Try next starting value
+      })
+    }
+
+    # If all attempts failed, throw error
+    if(is.null(out)) {
+      stop("function cannot be evaluated at initial parameters")
+    }
     beta.hat <- out$par
     beta.hat
     a=beta.hat[1]
